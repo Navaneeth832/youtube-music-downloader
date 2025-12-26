@@ -7,7 +7,7 @@ app = Flask(__name__)
 CORS(app)  # Allows your React frontend to talk to this server
 
 # Change this to your actual laptop path
-DEST_FOLDER = os.path.expanduser("/mnt/hdd/Github Projects/yt-downloader/temp_audio")
+DEST_FOLDER = os.path.expanduser("/media/navaneeth/38ce74e1-3ede-4e03-93b5-479fa46711a0/projects/yt-downloader/temp_audio")
 COOKIES_FILE = os.path.join(DEST_FOLDER, "cookies.txt")
 
 # Ensure directory exists
