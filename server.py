@@ -1,115 +1,122 @@
 import os
 import subprocess
-from flask import Flask, request, jsonify, send_from_directory
+import zipfile
+from flask import Flask, request, jsonify, send_from_directory, send_file, render_template
 from flask_cors import CORS
-from flask import Flask, render_template
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-CORS(app)  # Allows your React frontend to talk to this server
+CORS(app)
 
-# Change this to your actual laptop path
 DEST_FOLDER = os.path.expanduser("~/projects/yt-downloader/temp_audio")
-COOKIES_FILE = os.path.join(DEST_FOLDER, "cookies.txt")
+UPLOAD_FOLDER = os.path.join(DEST_FOLDER, "uploads")
+ZIP_PATH = os.path.join(DEST_FOLDER, "all_downloads.zip")
 
-# Ensure directory exists
-if not os.path.exists(DEST_FOLDER):
-    os.makedirs(DEST_FOLDER)
+os.makedirs(DEST_FOLDER, exist_ok=True)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route('/download', methods=['POST'])
-def download_media():
-    data = request.json
-    print("RAW DATA:", request.json)
+# ---------------- HOME ----------------
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-    url = (data or {}).get('url')
-    if not url or not url.startswith("http"):
-        return jsonify({"error": "Invalid or missing URL"}), 400
-
-    media_type = data.get('type')  # 'audio' or 'video'
-    quality = data.get('quality')   # e.g., '128k', '320k', '1080'
-  
-    if not url:
-        return jsonify({"error": "No URL provided"}), 400
-
-    # Build the yt-dlp command based on your "secret.txt" vibe
-    cmd = [
+# ---------------- CORE DOWNLOAD ----------------
+def run_yt_dlp(urls, media_type, quality, is_channel=False):
+    base_cmd = [
         "yt-dlp",
-        "--no-playlist",
-        "--cookies", COOKIES_FILE,
         "--force-overwrites",
         "-o", f"{DEST_FOLDER}/%(title)s.%(ext)s"
     ]
 
-    if media_type == 'audio':
-        audio_q = quality.replace('k', '') if quality else '192'
-        cmd += [
-            "-f", "ba",
+    if media_type == "audio":
+        q = quality.replace("k", "")
+        base_cmd += [
             "-x",
             "--audio-format", "mp3",
-            "--audio-quality", audio_q
+            "--audio-quality", q
         ]
-
     else:
-        # For video quality, we use -f to specify resolution
-        cmd += [
-            "-f", f"bestvideo[height<={quality}]+bestaudio/best[height<={quality}]",
+        base_cmd += [
+            "-f", f"bestvideo[height<={quality}]+bestaudio/best",
             "--merge-output-format", "mp4"
         ]
-    print("CMD:", " ".join(cmd))
-    url = url.split("&list=")[0]
 
-    cmd.append(url)
-    print("FINAL CMD:", cmd)
+    if not is_channel:
+        base_cmd.append("--no-playlist")
 
-    try:
-        # Run the command
-        process = subprocess.run(cmd, text=True)
+    base_cmd.extend(urls)
 
-        
-        if process.returncode == 0:
-            return jsonify({
-                "status": "success",
-                "message": f"Downloaded to {DEST_FOLDER}",
-                "output": process.stdout
+    subprocess.run(base_cmd)
+
+# ---------------- SINGLE / MULTI / CHANNEL ----------------
+@app.route("/download", methods=["POST"])
+def download():
+    data = request.json
+    mode = data.get("mode")  # single | multi | channel
+    media_type = data.get("type")
+    quality = data.get("quality")
+
+    if mode == "single":
+        urls = [data.get("url")]
+    elif mode == "multi":
+        urls = data.get("urls", [])
+    elif mode == "channel":
+        urls = [data.get("url")]
+    else:
+        return jsonify({"error": "Invalid mode"}), 400
+
+    run_yt_dlp(urls, media_type, quality, is_channel=(mode == "channel"))
+
+    return jsonify({"status": "started"})
+
+# ---------------- FILE UPLOAD ----------------
+@app.route("/download-file", methods=["POST"])
+def download_file():
+    file = request.files.get("file")
+    media_type = request.form.get("type")
+    quality = request.form.get("quality")
+
+    if not file:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    filename = secure_filename(file.filename)
+    path = os.path.join(UPLOAD_FOLDER, filename)
+    file.save(path)
+
+    with open(path) as f:
+        urls = [line.strip() for line in f if line.strip()]
+
+    run_yt_dlp(urls, media_type, quality)
+
+    return jsonify({"status": "started"})
+
+# ---------------- LIBRARY ----------------
+@app.route("/files")
+def files():
+    out = []
+    for f in os.listdir(DEST_FOLDER):
+        if f.endswith((".mp3", ".mp4", ".m4a")):
+            p = os.path.join(DEST_FOLDER, f)
+            out.append({
+                "name": f,
+                "size": f"{os.path.getsize(p)/(1024*1024):.2f} MB"
             })
-        else:
-            return jsonify({
-                "status": "error", 
-                "message": "yt-dlp failed",
-                "error": process.stderr
-            }), 500
+    return jsonify(out)
 
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/files', methods=['GET'])
-def list_files():
-    # Return list of files in the destination folder
-    files = []
-    for filename in os.listdir(DEST_FOLDER):
-        if filename.endswith(('.mp3', '.mp4', '.m4a')):
-            path = os.path.join(DEST_FOLDER, filename)
-            files.append({
-                "name": filename,
-                "size": f"{os.path.getsize(path) / (1024*1024):.2f} MB",
-                "path": path
-            })
-    return jsonify(files)
-
-@app.route('/files/<filename>', methods=['GET'])
+@app.route("/files/<filename>")
 def get_file(filename):
-    # This allows the "Download to browser" option
     return send_from_directory(DEST_FOLDER, filename, as_attachment=True)
 
-if __name__ == '__main__':
-    print(f"🚀 Navan YT Downloader Server running on http://localhost:5000")
-    print(f"📂 Destination: {DEST_FOLDER}")
-    app.run(
-    host="0.0.0.0",
-    port=8000,
-    debug=True,
-    use_reloader=True
-    )
+# ---------------- ZIP ALL ----------------
+@app.route("/zip")
+def zip_all():
+    with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for f in os.listdir(DEST_FOLDER):
+            if f.endswith((".mp3", ".mp4", ".m4a")):
+                zipf.write(os.path.join(DEST_FOLDER, f), f)
+    return send_file(ZIP_PATH, as_attachment=True)
 
-@app.route("/")
-def home():
-    return render_template("index.html")
+# ---------------- RUN ----------------
+if __name__ == "__main__":
+    print("🚀 Server running on http://0.0.0.0:8000")
+    app.run(host="0.0.0.0", port=8000, debug=True)
