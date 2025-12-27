@@ -2,12 +2,13 @@ import os
 import subprocess
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask import Flask, render_template
 
 app = Flask(__name__)
 CORS(app)  # Allows your React frontend to talk to this server
 
 # Change this to your actual laptop path
-DEST_FOLDER = os.path.expanduser("/media/navaneeth/38ce74e1-3ede-4e03-93b5-479fa46711a0/projects/yt-downloader/temp_audio")
+DEST_FOLDER = os.path.expanduser("~/projects/yt-downloader/temp_audio")
 COOKIES_FILE = os.path.join(DEST_FOLDER, "cookies.txt")
 
 # Ensure directory exists
@@ -102,4 +103,13 @@ def get_file(filename):
 if __name__ == '__main__':
     print(f"🚀 Navan YT Downloader Server running on http://localhost:5000")
     print(f"📂 Destination: {DEST_FOLDER}")
-    app.run(port=5000, debug=True)
+    app.run(
+    host="0.0.0.0",
+    port=8000,
+    debug=True,
+    use_reloader=True
+    )
+
+@app.route("/")
+def home():
+    return render_template("index.html")
